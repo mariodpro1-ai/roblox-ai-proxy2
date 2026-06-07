@@ -4,45 +4,56 @@ const app = express();
 app.use(express.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const memoriaJugadores = new Map(); // Aquí vivirá la memoria
 
-// 🛡️ EL ESCUDO DE SEGURIDAD (Middleware)
+// 🛡️ ESCUDO DE SEGURIDAD (Se mantiene igual)
 const verificarSeguridadRoblox = (req, res, next) => {
     const tokenRecibido = req.headers['x-roblox-auth'];
-    const tokenCorrecto = process.env.ROBLOX_SECRET_TOKEN; // Tu contraseña de Render
-    
+    const tokenCorrecto = process.env.ROBLOX_SECRET_TOKEN;
     const universeIdRecibido = req.headers['roblox-universe-id']; 
-    const juegoGlobalAutorizado = "10109347231"; // 👈 BORRA ESTO Y PON TU UNIVERSE ID ENTRE LAS COMILLAS
+    const juegoGlobalAutorizado = "10109347231";
 
-    // 1. ¿Tiene la contraseña secreta?
-    if (!tokenRecibido || tokenRecibido !== tokenCorrecto) {
-        console.log("[BLOQUEO]: Token inválido o ausente.");
-        return res.status(401).json({ reply: "Error: No autorizado" });
-    }
-
-    // 2. ¿Viene de tu juego oficial?
-    if (!universeIdRecibido || universeIdRecibido !== juegoGlobalAutorizado) {
-        console.log("[BLOQUEO]: ID de juego no autorizado.");
-        return res.status(403).json({ reply: "Error: Juego no autorizado" });
-    }
-
-    next(); // Luz verde si todo está bien
+    if (!tokenRecibido || tokenRecibido !== tokenCorrecto) return res.status(401).json({ reply: "Error: No autorizado" });
+    if (!universeIdRecibido || universeIdRecibido !== juegoGlobalAutorizado) return res.status(403).json({ reply: "Error: Juego no autorizado" });
+    next();
 };
 
-// Tu ruta original pero ahora protegida por el escudo
 app.post("/chat", verificarSeguridadRoblox, async (req, res) => {
+    const { message, systemPrompt, userId } = req.body;
+    
+    // Inicializar memoria si es nuevo
+    if (!memoriaJugadores.has(userId)) {
+        memoriaJugadores.set(userId, { historial: [], perfil: { nombre: "", comida: "", color: "" } });
+    }
+    const sesion = memoriaJugadores.get(userId);
+
+    // 1. Memoria corta: Agregar mensaje y mantener máximo 8 (4 usuario + 4 IA)
+    sesion.historial.push({ role: "user", content: message });
+    
+    // 2. Memoria ligera: Intentar detectar datos básicos
+    const detectarDatos = `Analiza si en este mensaje el usuario dice su nombre, comida favorita o color favorito. Responde solo con JSON: {"nombre": "...", "comida": "...", "color": "..."} o usa "desconocido". Mensaje: "${message}"`;
+    // (Nota: Esto es una simplificación, en producción se suele usar una llamada dedicada o un proceso asíncrono)
+
     try {
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
-                { role: "system", content: req.body.systemPrompt || "Eres un bot asistente." }, // Mantiene tus personalidades de Roblox
-                { role: "user", content: req.body.message }
+                { role: "system", content: `${systemPrompt} Recuerda esto del jugador: ${JSON.stringify(sesion.perfil)}` },
+                ...sesion.historial.slice(-8)
             ],
+            max_tokens: 100 // 👈 Límite estricto de gasto
         });
 
-        res.json({ reply: completion.choices[0].message.content });
+        const respuestaIA = completion.choices[0].message.content;
+        
+        // Guardar respuesta en historial
+        sesion.historial.push({ role: "assistant", content: respuestaIA });
+        if (sesion.historial.length > 8) sesion.historial.shift();
+
+        res.json({ reply: respuestaIA });
     } catch (error) {
-        console.error("Error con OpenAI:", error);
-        res.status(500).json({ reply: "Error" });
+        console.error("Error:", error);
+        res.status(500).json({ reply: "Error al procesar IA" });
     }
 });
 
