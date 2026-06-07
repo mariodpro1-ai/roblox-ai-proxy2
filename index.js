@@ -1,12 +1,12 @@
 const express = require("express");
 const { OpenAI } = require("openai");
+const crypto = require("crypto"); // 👈 Importamos esto para crear IDs únicos
 const app = express();
 app.use(express.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const memoriaJugadores = new Map(); // Aquí vivirá la memoria
+const memoriaJugadores = new Map();
 
-// 🛡️ ESCUDO DE SEGURIDAD (Se mantiene igual)
 const verificarSeguridadRoblox = (req, res, next) => {
     const tokenRecibido = req.headers['x-roblox-auth'];
     const tokenCorrecto = process.env.ROBLOX_SECRET_TOKEN;
@@ -21,32 +21,34 @@ const verificarSeguridadRoblox = (req, res, next) => {
 app.post("/chat", verificarSeguridadRoblox, async (req, res) => {
     const { message, systemPrompt, userId } = req.body;
     
-    // Inicializar memoria si es nuevo
-    if (!memoriaJugadores.has(userId)) {
-        memoriaJugadores.set(userId, { historial: [], perfil: { nombre: "", comida: "", color: "" } });
-    }
-    const sesion = memoriaJugadores.get(userId);
+    // 1. GENERAR ID ÚNICO PARA CADA BOT
+    // Creamos un hash basado en el systemPrompt (personalidad). 
+    // Si la personalidad cambia, el hash cambia.
+    const npcId = crypto.createHash('md5').update(systemPrompt).digest('hex').substring(0, 8);
+    const sessionId = `${userId}_${npcId}`; // La llave ahora es "ID_JUGADOR + ID_NPC"
 
-    // 1. Memoria corta: Agregar mensaje y mantener máximo 8 (4 usuario + 4 IA)
+    // 2. INICIALIZAR MEMORIA POR SESIÓN (JUGADOR + BOT)
+    if (!memoriaJugadores.has(sessionId)) {
+        memoriaJugadores.set(sessionId, { historial: [], perfil: { nombre: "", comida: "", color: "" } });
+    }
+    const sesion = memoriaJugadores.get(sessionId);
+
+    // 3. MEMORIA CORTA (Máximo 8 mensajes)
     sesion.historial.push({ role: "user", content: message });
-    
-    // 2. Memoria ligera: Intentar detectar datos básicos
-    const detectarDatos = `Analiza si en este mensaje el usuario dice su nombre, comida favorita o color favorito. Responde solo con JSON: {"nombre": "...", "comida": "...", "color": "..."} o usa "desconocido". Mensaje: "${message}"`;
-    // (Nota: Esto es una simplificación, en producción se suele usar una llamada dedicada o un proceso asíncrono)
+    if (sesion.historial.length > 8) sesion.historial.shift();
 
     try {
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
                 { role: "system", content: `${systemPrompt} Recuerda esto del jugador: ${JSON.stringify(sesion.perfil)}` },
-                ...sesion.historial.slice(-8)
+                ...sesion.historial
             ],
-            max_tokens: 100 // 👈 Límite estricto de gasto
+            max_tokens: 100
         });
 
         const respuestaIA = completion.choices[0].message.content;
         
-        // Guardar respuesta en historial
         sesion.historial.push({ role: "assistant", content: respuestaIA });
         if (sesion.historial.length > 8) sesion.historial.shift();
 
