@@ -15,12 +15,13 @@ try {
     console.error("Error iniciando OpenAI:", error);
 }
 
+// Nuestra memoria RAM segura
 const memoriaJugadores = new Map();
+const TIEMPO_EXPIRACION = 10 * 60 * 1000; // 10 minutos en milisegundos
 
 // 🛡️ Tu Middleware de seguridad clásico
 const verificarSeguridadRoblox = (req, res, next) => {
     const tokenRecibido = req.headers['x-roblox-auth'];
-    // Toma la contraseña de las variables de entorno, o usa tu AKI_ por defecto
     const tokenCorrecto = process.env.ROBLOX_SECRET_TOKEN || "AKI_7FvQm92XkLpR5tNzWc4HdJ8sByE1gUaM6rTf3YqX9oCiKpV2nL8wZj";
     const universeIdRecibido = req.headers['roblox-universe-id'];
     const juegoGlobalAutorizado = "10109347231";
@@ -34,31 +35,80 @@ const verificarSeguridadRoblox = (req, res, next) => {
     next();
 };
 
+// 🧠 FUNCIÓN EXCLUSIVA: Extrae datos importantes para la memoria a largo plazo
+async function actualizarPerfilJugador(textoJugador, perfilActual) {
+    try {
+        const respuesta = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { 
+                    role: "system", 
+                    content: `Tu único trabajo es leer el mensaje del usuario y actualizar el perfil JSON del jugador si descubres nueva información relevante. Retorna ESTRICTAMENTE el JSON actualizado.
+                    Perfil Actual: ${JSON.stringify(perfilActual)}` 
+                },
+                { role: "user", content: textoJugador }
+            ],
+            max_tokens: 60,
+            temperature: 0.1
+        });
+        return JSON.parse(respuesta.choices[0].message.content);
+    } catch (e) {
+        return perfilActual;
+    }
+}
+
 app.post("/chat", verificarSeguridadRoblox, async (req, res) => {
-    // Extraemos 'mensaje' (nuevo script) o 'message' (viejo script) para ser 100% compatibles
     const { message, mensaje, systemPrompt, userId, npcId, nombre } = req.body;
     const textoDelJugador = mensaje || message || "";
 
     const identifier = npcId || crypto.createHash('md5').update(systemPrompt || "").digest('hex').substring(0, 8);
     const sessionId = `${userId}_${identifier}`;
 
-    // Tu estructura de memoria clásica
+    // Si el jugador no existe o su memoria fue borrada por inactividad, lo recreamos
     if (!memoriaJugadores.has(sessionId)) {
-        memoriaJugadores.set(sessionId, { historial: [], perfil: { nombre: nombre || "Jugador", comida: "", color: "" } });
+        memoriaJugadores.set(sessionId, { 
+            historial: [], 
+            perfil: { 
+                nombre: nombre || "Jugador",
+                datosRecordados: "Ninguno todavía.",
+                estadoRelacion: "Neutral"
+            },
+            temporizador: null // Guardaremos el reloj aquí
+        });
+        console.log(`[RAM] 🟢 Creada nueva memoria para la sesión: ${sessionId}`);
     }
+    
     const sesion = memoriaJugadores.get(sessionId);
 
-    // 🚨 FUSIÓN: Le inyectamos la regla de las Físicas a tu Prompt
-    const PROMPT_DINAMICO = `${systemPrompt} Recuerda esto del jugador: ${JSON.stringify(sesion.perfil)}
+    // 🛡️ REINICIAR EL TEMPORIZADOR DE LIMPIEZA (La clave para cuidar la RAM)
+    if (sesion.temporizador) {
+        clearTimeout(sesion.temporizador); // Cancela el borrado anterior porque el jugador sigue hablando
+    }
+    
+    // Programamos un nuevo borrado para dentro de 10 minutos
+    sesion.temporizador = setTimeout(() => {
+        memoriaJugadores.delete(sessionId);
+        console.log(`[RAM] 🧹 Memoria borrada por inactividad de 10 min: ${sessionId}`);
+    }, TIEMPO_EXPIRACION);
+
+    // 🧠 Paso 1: Analizar el mensaje en segundo plano para extraer recuerdos
+    if (textoDelJugador.length > 2) {
+        sesion.perfil = await actualizarPerfilJugador(textoDelJugador, sesion.perfil);
+    }
+
+    // 🧠 Paso 2: Inyectar los datos memorizados de forma indestructible en el prompt
+    const PROMPT_DINAMICO = `${systemPrompt}
+    
+🧠 MEMORIA A LARGO PLAZO DEL JUGADOR:
+- Nombre del usuario: ${sesion.perfil.nombre}
+- Hechos memorizados: ${sesion.perfil.datosRecordados}
+- Estado de la relación: ${sesion.perfil.estadoRelacion}
 
 🚨 REGLA DE FORMATO INQUEBRANTABLE (SUBTÍTULOS RÁPIDOS) 🚨
 Tu respuesta debe mostrarse como subtítulos cortos de TikTok para un motor de físicas en 3D. 
 - DEBES usar el separador "||" constantemente en tus respuestas.
 - ESTÁ ESTRICTAMENTE PROHIBIDO poner más de 6 palabras juntas sin el separador "||".
-- Cero asteriscos (*), no describas acciones físicas, habla solo con diálogos directos.
-
-EJEMPLO OBLIGATORIO:
-"Hola, ${nombre || "amigo"}.||¿Qué estás haciendo aquí?||Me alegra verte.||Espero que tengas tiempo."`;
+- Cero asteriscos (*), habla solo con diálogos directos.`;
 
     sesion.historial.push({ role: "user", content: textoDelJugador });
     if (sesion.historial.length > 8) sesion.historial.shift();
@@ -71,7 +121,7 @@ EJEMPLO OBLIGATORIO:
                 ...sesion.historial
             ],
             max_tokens: 100,
-            temperature: 0.6 // Temperatura baja para obligar a la IA a usar los ||
+            temperature: 0.7
         });
 
         const respuestaIA = completion.choices[0].message.content;
@@ -79,8 +129,13 @@ EJEMPLO OBLIGATORIO:
         sesion.historial.push({ role: "assistant", content: respuestaIA });
         if (sesion.historial.length > 8) sesion.historial.shift();
 
-        // Enviamos 'reply' (tu formato) y 'respuesta' por si acaso
-        res.json({ reply: respuestaIA, respuesta: respuestaIA, emocion: npcId === "Gojo" ? "OBSESIVO" : "NORMAL" });
+        // Selector dinámico de emociones básico basado en el texto
+        let emocionFinal = "NORMAL";
+        if (npcId === "Gojo" && (respuestaIA.includes("😏") || respuestaIA.includes("🥱"))) {
+            emocionFinal = "OBSESIVO";
+        }
+
+        res.json({ reply: respuestaIA, respuesta: respuestaIA, emocion: emocionFinal });
         
     } catch (error) {
         console.error("Error:", error);
@@ -88,8 +143,7 @@ EJEMPLO OBLIGATORIO:
     }
 });
 
-// Cambiado a 10000 para que Render no falle al encender
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-    console.log(`Servidor clásico fusionado con físicas corriendo en puerto ${PORT}`);
+    console.log(`Servidor con Auto-Limpieza de RAM corriendo en puerto ${PORT}`);
 });
