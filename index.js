@@ -1,45 +1,55 @@
-const express = require('express');
-const cors = require('cors');
-const { OpenAI } = require('openai');
-
+const express = require("express");
+const cors = require("cors");
+const { OpenAI } = require("openai");
+const crypto = require("crypto");
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Escudo anti-crash por si la llave de OpenAI tarda en cargar
+let openai;
+try {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "llave_falsa" });
+} catch (error) {
+    console.error("Error iniciando OpenAI:", error);
+}
+
 const memoriaJugadores = new Map();
 
-// 🔑 CAMBIO CRÍTICO: Sincronizado con el TOKEN_SECRETO de tu script de Roblox
-const LLAVE_ROBLOX = "AKI_7FvQm92XkLpR5tNzWc4HdJ8sByE1gUaM6rTf3YqX9oCiKpV2nL8wZj";
-const UNIVERSE_ID = "10109347231";
+// 🛡️ Tu Middleware de seguridad clásico
+const verificarSeguridadRoblox = (req, res, next) => {
+    const tokenRecibido = req.headers['x-roblox-auth'];
+    // Toma la contraseña de las variables de entorno, o usa tu AKI_ por defecto
+    const tokenCorrecto = process.env.ROBLOX_SECRET_TOKEN || "AKI_7FvQm92XkLpR5tNzWc4HdJ8sByE1gUaM6rTf3YqX9oCiKpV2nL8wZj";
+    const universeIdRecibido = req.headers['roblox-universe-id'];
+    const juegoGlobalAutorizado = "10109347231";
 
-app.post('/chat', async (req, res) => {
-    try {
-        // 🔄 SE ADAPTÓ PARA RECONOCER LOS ENCABEZADOS DE TU NUEVO CEREBRO DE ROBLOX
-        const llaveRecibida = req.headers['x-roblox-auth'] || req.headers['x-api-key'];
-        const universeRecibido = req.headers['roblox-universe-id'] || req.headers['x-universe-id'];
-        
-        if (llaveRecibida !== LLAVE_ROBLOX) {
-            console.warn("[SEGURIDAD] Intento de conexión rechazado: Llave inválida.");
-            return res.status(401).json({ error: "Llave inválida." });
-        }
-        if (universeRecibido !== UNIVERSE_ID) {
-            console.warn("[SEGURIDAD] Intento de conexión rechazado: Universo incorrecto. Recibido:", universeRecibido);
-            return res.status(403).json({ error: "Universo incorrecto." });
-        }
+    if (!tokenRecibido || tokenRecibido !== tokenCorrecto) {
+        return res.status(401).json({ reply: "Error de red.||No autorizado." });
+    }
+    if (!universeIdRecibido || universeIdRecibido !== juegoGlobalAutorizado) {
+        return res.status(403).json({ reply: "Error de red.||Juego no autorizado." });
+    }
+    next();
+};
 
-        // 1. Extraemos los datos enviados desde el Cerebro Avanzado de Roblox
-        const { mensaje, systemPrompt, userId, npcId, nombre } = req.body;
+app.post("/chat", verificarSeguridadRoblox, async (req, res) => {
+    // Extraemos 'mensaje' (nuevo script) o 'message' (viejo script) para ser 100% compatibles
+    const { message, mensaje, systemPrompt, userId, npcId, nombre } = req.body;
+    const textoDelJugador = mensaje || message || "";
 
-        // 2. Creamos una memoria aislada para este Jugador + Este NPC específico
-        const sessionId = `${userId}_${npcId || 'default'}`;
-        if (!memoriaJugadores.has(sessionId)) {
-            memoriaJugadores.set(sessionId, []);
-        }
-        const historial = memoriaJugadores.get(sessionId);
+    const identifier = npcId || crypto.createHash('md5').update(systemPrompt || "").digest('hex').substring(0, 8);
+    const sessionId = `${userId}_${identifier}`;
 
-        // 3. FUSIÓN: Usamos la personalidad del NPC, pero OBLIGAMOS el formato de Físicas (||)
-        const PROMPT_DINAMICO = `${systemPrompt} Estás hablando con el jugador ${nombre}.
+    // Tu estructura de memoria clásica
+    if (!memoriaJugadores.has(sessionId)) {
+        memoriaJugadores.set(sessionId, { historial: [], perfil: { nombre: nombre || "Jugador", comida: "", color: "" } });
+    }
+    const sesion = memoriaJugadores.get(sessionId);
+
+    // 🚨 FUSIÓN: Le inyectamos la regla de las Físicas a tu Prompt
+    const PROMPT_DINAMICO = `${systemPrompt} Recuerda esto del jugador: ${JSON.stringify(sesion.perfil)}
 
 🚨 REGLA DE FORMATO INQUEBRANTABLE (SUBTÍTULOS RÁPIDOS) 🚨
 Tu respuesta debe mostrarse como subtítulos cortos de TikTok para un motor de físicas en 3D. 
@@ -48,46 +58,38 @@ Tu respuesta debe mostrarse como subtítulos cortos de TikTok para un motor de f
 - Cero asteriscos (*), no describas acciones físicas, habla solo con diálogos directos.
 
 EJEMPLO OBLIGATORIO:
-"Hola, ${nombre}.||¿Qué estás haciendo aquí?||Me alegra verte.||Espero que tengas tiempo."`;
+"Hola, ${nombre || "amigo"}.||¿Qué estás haciendo aquí?||Me alegra verte.||Espero que tengas tiempo."`;
 
-        // 4. Construimos la conversación
-        const mensajesParaOpenAI = [
-            { role: "system", content: PROMPT_DINAMICO },
-            ...historial,
-            { role: "user", content: mensaje }
-        ];
+    sesion.historial.push({ role: "user", content: textoDelJugador });
+    if (sesion.historial.length > 8) sesion.historial.shift();
 
-        // 5. Llamada a OpenAI
+    try {
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
-            messages: mensajesParaOpenAI,
+            messages: [
+                { role: "system", content: PROMPT_DINAMICO },
+                ...sesion.historial
+            ],
             max_tokens: 100,
-            temperature: 0.6 // Temperatura baja para que respete los "||"
+            temperature: 0.6 // Temperatura baja para obligar a la IA a usar los ||
         });
 
         const respuestaIA = completion.choices[0].message.content;
 
-        // 6. Guardamos en memoria
-        historial.push({ role: "user", content: mensaje });
-        historial.push({ role: "assistant", content: respuestaIA });
-        if (historial.length > 8) {
-            historial.shift();
-            historial.shift();
-        }
+        sesion.historial.push({ role: "assistant", content: respuestaIA });
+        if (sesion.historial.length > 8) sesion.historial.shift();
 
-        // Devolvemos el formato exacto que tu script de Roblox espera leer (.respuesta o .reply)
-        res.json({ 
-            respuesta: respuestaIA, 
-            reply: respuestaIA, 
-            emocion: npcId === "Gojo" ? "OBSESIVO" : "NORMAL" 
-        }); 
-
+        // Enviamos 'reply' (tu formato) y 'respuesta' por si acaso
+        res.json({ reply: respuestaIA, respuesta: respuestaIA, emocion: npcId === "Gojo" ? "OBSESIVO" : "NORMAL" });
+        
     } catch (error) {
-        console.error("Error con OpenAI:", error);
-        res.status(500).json({ respuesta: "¡Rayos!||Algo falló en mi cabeza.||¿Puedes repetirlo?", reply: "¡Rayos!||Algo falló en mi cabeza.||¿Puedes repetirlo?", emocion: "TRISTE" });
+        console.error("Error:", error);
+        res.status(500).json({ reply: "¡Rayos!||Algo falló en la conexión.||¿Qué decías?" });
     }
 });
 
-// Cambiado a 10000 exigido óptimamente por Render para evitar fallos de encendido
+// Cambiado a 10000 para que Render no falle al encender
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Servidor FUSIONADO corriendo en puerto ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Servidor clásico fusionado con físicas corriendo en puerto ${PORT}`);
+});
