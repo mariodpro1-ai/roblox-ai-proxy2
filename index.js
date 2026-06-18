@@ -9,22 +9,30 @@ app.use(express.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const memoriaJugadores = new Map();
 
-const LLAVE_ROBLOX = "key_prod_a8F3kLm92XqP7vNzR5tYwU1BcDhE6GsK4Mj";
+// 🔑 CAMBIO CRÍTICO: Sincronizado con el TOKEN_SECRETO de tu script de Roblox
+const LLAVE_ROBLOX = "AKI_7FvQm92XkLpR5tNzWc4HdJ8sByE1gUaM6rTf3YqX9oCiKpV2nL8wZj";
 const UNIVERSE_ID = "10109347231";
 
 app.post('/chat', async (req, res) => {
     try {
-        const llaveRecibida = req.headers['x-api-key'];
-        const universeRecibido = req.headers['x-universe-id'];
+        // 🔄 SE ADAPTÓ PARA RECONOCER LOS ENCABEZADOS DE TU NUEVO CEREBRO DE ROBLOX
+        const llaveRecibida = req.headers['x-roblox-auth'] || req.headers['x-api-key'];
+        const universeRecibido = req.headers['roblox-universe-id'] || req.headers['x-universe-id'];
         
-        if (llaveRecibida !== LLAVE_ROBLOX) return res.status(401).json({ error: "Llave inválida." });
-        if (universeRecibido !== UNIVERSE_ID) return res.status(403).json({ error: "Universo incorrecto." });
+        if (llaveRecibida !== LLAVE_ROBLOX) {
+            console.warn("[SEGURIDAD] Intento de conexión rechazado: Llave inválida.");
+            return res.status(401).json({ error: "Llave inválida." });
+        }
+        if (universeRecibido !== UNIVERSE_ID) {
+            console.warn("[SEGURIDAD] Intento de conexión rechazado: Universo incorrecto. Recibido:", universeRecibido);
+            return res.status(403).json({ error: "Universo incorrecto." });
+        }
 
         // 1. Extraemos los datos enviados desde el Cerebro Avanzado de Roblox
         const { mensaje, systemPrompt, userId, npcId, nombre } = req.body;
 
         // 2. Creamos una memoria aislada para este Jugador + Este NPC específico
-        const sessionId = `${userId}_${npcId}`;
+        const sessionId = `${userId}_${npcId || 'default'}`;
         if (!memoriaJugadores.has(sessionId)) {
             memoriaJugadores.set(sessionId, []);
         }
@@ -67,13 +75,19 @@ EJEMPLO OBLIGATORIO:
             historial.shift();
         }
 
-        res.json({ respuesta: respuestaIA, emocion: "NORMAL" }); 
+        // Devolvemos el formato exacto que tu script de Roblox espera leer (.respuesta o .reply)
+        res.json({ 
+            respuesta: respuestaIA, 
+            reply: respuestaIA, 
+            emocion: npcId === "Gojo" ? "OBSESIVO" : "NORMAL" 
+        }); 
 
     } catch (error) {
         console.error("Error con OpenAI:", error);
-        res.status(500).json({ respuesta: "¡Rayos!||Algo falló en mi cabeza.||¿Puedes repetirlo?", emocion: "TRISTE" });
+        res.status(500).json({ respuesta: "¡Rayos!||Algo falló en mi cabeza.||¿Puedes repetirlo?", reply: "¡Rayos!||Algo falló en mi cabeza.||¿Puedes repetirlo?", emocion: "TRISTE" });
     }
 });
 
-const PORT = process.env.PORT || 3000;
+// Cambiado a 10000 exigido óptimamente por Render para evitar fallos de encendido
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Servidor FUSIONADO corriendo en puerto ${PORT}`));
