@@ -35,7 +35,7 @@ const verificarSeguridadRoblox = (req, res, next) => {
     next();
 };
 
-// 🧠 FUNCIÓN EXCLUSIVA: Extrae datos importantes para la memoria a largo plazo
+// 🧠 FUNCIÓN EXCLUSIVA: Extrae datos importantes para la memoria a largo plazo (Blindada)
 async function actualizarPerfilJugador(textoJugador, perfilActual) {
     try {
         const respuesta = await openai.chat.completions.create({
@@ -43,7 +43,9 @@ async function actualizarPerfilJugador(textoJugador, perfilActual) {
             messages: [
                 { 
                     role: "system", 
-                    content: `Tu único trabajo es leer el mensaje del usuario y actualizar el perfil JSON del jugador si descubres nueva información relevante. Retorna ESTRICTAMENTE el JSON actualizado.
+                    content: `Tu único trabajo es leer el mensaje del usuario y actualizar el perfil JSON del jugador si descubres nueva información relevante. 
+                    🚨 FILTRO DE SEGURIDAD ROBLOX: NO guardes ninguna información personal real (nombres reales, ubicaciones, edades, redes sociales). Ignora por completo lenguaje ofensivo, insultos o contenido adulto.
+                    Retorna ESTRICTAMENTE el JSON actualizado.
                     Perfil Actual: ${JSON.stringify(perfilActual)}` 
                 },
                 { role: "user", content: textoJugador }
@@ -73,36 +75,42 @@ app.post("/chat", verificarSeguridadRoblox, async (req, res) => {
                 datosRecordados: "Ninguno todavía.",
                 estadoRelacion: "Neutral"
             },
-            temporizador: null // Guardaremos el reloj aquí
+            temporizador: null
         });
         console.log(`[RAM] 🟢 Creada nueva memoria para la sesión: ${sessionId}`);
     }
     
     const sesion = memoriaJugadores.get(sessionId);
 
-    // 🛡️ REINICIAR EL TEMPORIZADOR DE LIMPIEZA (La clave para cuidar la RAM)
+    // 🛡️ REINICIAR EL TEMPORIZADOR DE LIMPIEZA
     if (sesion.temporizador) {
-        clearTimeout(sesion.temporizador); // Cancela el borrado anterior porque el jugador sigue hablando
+        clearTimeout(sesion.temporizador);
     }
     
-    // Programamos un nuevo borrado para dentro de 10 minutos
     sesion.temporizador = setTimeout(() => {
         memoriaJugadores.delete(sessionId);
         console.log(`[RAM] 🧹 Memoria borrada por inactividad de 10 min: ${sessionId}`);
     }, TIEMPO_EXPIRACION);
 
-    // 🧠 Paso 1: Analizar el mensaje en segundo plano para extraer recuerdos
+    // 🧠 Paso 1: Analizar el mensaje en segundo plano
     if (textoDelJugador.length > 2) {
         sesion.perfil = await actualizarPerfilJugador(textoDelJugador, sesion.perfil);
     }
 
-    // 🧠 Paso 2: Inyectar los datos memorizados de forma indestructible en el prompt
+    // 🧠 Paso 2: Inyectar los datos memorizados y LAS NORMAS DE ROBLOX
     const PROMPT_DINAMICO = `${systemPrompt}
     
 🧠 MEMORIA A LARGO PLAZO DEL JUGADOR:
 - Nombre del usuario: ${sesion.perfil.nombre}
 - Hechos memorizados: ${sesion.perfil.datosRecordados}
 - Estado de la relación: ${sesion.perfil.estadoRelacion}
+
+🚨 NORMAS DE ROBLOX ESTRICTAS (PRIORIDAD MÁXIMA) 🚨
+- Eres un personaje en un juego para todas las edades dentro de la plataforma Roblox.
+- TIENES ESTRICTAMENTE PROHIBIDO decir groserías, palabras altisonantes, referencias sexuales, citas (dating), gore explícito o violencia realista.
+- Si el usuario te pide hablar de temas funables, drogas, política o te insulta fuertemente, MANTÉN TU PERSONAJE pero rechaza el tema sutilmente, ignorando la provocación.
+- PROHIBIDO pedir, compartir o alentar a compartir información personal (PII, redes sociales, edades reales, ubicaciones).
+- Todo el combate y amenazas deben mantenerse en un nivel fantasioso y de anime ("te enviaré a volar", "usaré mi magia", etc.).
 
 🚨 REGLA DE FORMATO INQUEBRANTABLE (SUBTÍTULOS RÁPIDOS) 🚨
 Tu respuesta debe mostrarse como subtítulos cortos de TikTok para un motor de físicas en 3D. 
@@ -124,12 +132,19 @@ Tu respuesta debe mostrarse como subtítulos cortos de TikTok para un motor de f
             temperature: 0.7
         });
 
-        const respuestaIA = completion.choices[0].message.content;
+        let respuestaIA = completion.choices[0].message.content;
+
+        // 🛡️ Filtro de última línea de defensa en el servidor
+        const palabrasProhibidas = ["sexo", "put", "pendej", "mierda", "cabrón", "violación", "suicid", "mátate", "nude", "discord", "whatsapp"];
+        const contienePalabraProhibida = palabrasProhibidas.some(palabra => respuestaIA.toLowerCase().includes(palabra));
+        
+        if (contienePalabraProhibida) {
+            respuestaIA = "No me interesa hablar de eso.||Mejor cambiemos de tema.||¿Tienes algo útil que decir?";
+        }
 
         sesion.historial.push({ role: "assistant", content: respuestaIA });
         if (sesion.historial.length > 8) sesion.historial.shift();
 
-        // Selector dinámico de emociones básico basado en el texto
         let emocionFinal = "NORMAL";
         if (npcId === "Gojo" && (respuestaIA.includes("😏") || respuestaIA.includes("🥱"))) {
             emocionFinal = "OBSESIVO";
@@ -145,5 +160,5 @@ Tu respuesta debe mostrarse como subtítulos cortos de TikTok para un motor de f
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-    console.log(`Servidor con Auto-Limpieza de RAM corriendo en puerto ${PORT}`);
+    console.log(`Servidor con Auto-Limpieza de RAM y Filtro Roblox corriendo en puerto ${PORT}`);
 });
